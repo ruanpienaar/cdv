@@ -1,0 +1,33 @@
+<nav class="topbar">
+  <span class="logo">CDV</span>
+
+  <%= if @dump_status.status == :loaded do %>
+    <span class="dump-name"><%= @dump_status.filename %></span>
+    <%= if @dump_status.truncated do %>
+      <span class="truncated-badge">TRUNCATED</span>
+    <% end %>
+  <% end %>
+
+  <div class="spacer"></div>
+
+  <%= if @dump_status.status == :loaded do %>
+    <.link navigate={~p"/general"}   class={nav_class(@current_page, "general")}>General</.link>
+    <.link navigate={~p"/processes"} class={nav_class(@current_page, "processes")}>Processes</.link>
+    <.link navigate={~p"/ports"}     class={nav_class(@current_page, "ports")}>Ports</.link>
+    <.link navigate={~p"/ets"}       class={nav_class(@current_page, "ets")}>ETS</.link>
+    <.link navigate={~p"/timers"}    class={nav_class(@current_page, "timers")}>Timers</.link>
+    <.link navigate={~p"/nodes"}     class={nav_class(@current_page, "nodes")}>Nodes</.link>
+    <.link navigate={~p"/memory"}    class={nav_class(@current_page, "memory")}>Memory</.link>
+    <.link navigate={~p"/modules"}   class={nav_class(@current_page, "modules")}>Modules</.link>
+    <.link navigate={~p"/"} class="nav-link">⏏ Unload</.link>
+  <% else %>
+    <.link navigate={~p"/"} class={nav_class(@current_page, "home")}>Load Dump</.link>
+  <% end %>
+</nav>
+
+<main class="content">
+  <%= if flash = Phoenix.Flash.get(@flash, :error) do %>
+    <div class="flash-error"><%= flash %></div>
+  <% end %>
+  <%= @inner_content %>
+</main>
