@@ -75,5 +75,6 @@ defmodule CdvWeb.PortDetailLive do
       _ -> inspect(v)
     end
   end
+  defp fmt(v) when is_tuple(v), do: inspect(v)
   defp fmt(v), do: to_string(v)
 end

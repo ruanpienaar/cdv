@@ -151,7 +151,13 @@ defmodule Cdv.DumpServer do
   @impl true
   def handle_call({:port_info, port_str}, from, state) do
     async_reply(from, fn ->
-      call_backend(:port, [String.to_charlist(port_str)], &Records.port_to_map/1)
+      # get_ports stores ids as {X, Y} tuples; get_port looks up by "#Port<X.Y>" charlist
+      port_id =
+        case Regex.run(~r/^(\d+)\.(\d+)$/, port_str) do
+          [_, a, b] -> String.to_charlist("#Port<#{a}.#{b}>")
+          _         -> String.to_charlist(port_str)
+        end
+      call_backend(:port, [port_id], &Records.port_to_map/1)
     end)
     {:noreply, state}
   end

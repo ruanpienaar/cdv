@@ -92,6 +92,8 @@ defmodule CdvWeb.PortsLive do
 
   defp fmt(nil), do: "—"
   defp fmt(v) when is_pid(v), do: v |> :erlang.pid_to_list() |> List.to_string()
+  defp fmt({a, b}) when is_integer(a) and is_integer(b), do: "#{a}.#{b}"
+  defp fmt(v) when is_tuple(v), do: inspect(v)
   defp fmt(v) when is_list(v) do
     try do
       if List.ascii_printable?(v), do: List.to_string(v), else: inspect(v)

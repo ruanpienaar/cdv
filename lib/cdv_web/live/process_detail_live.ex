@@ -91,5 +91,6 @@ defmodule CdvWeb.ProcessDetailLive do
       _ -> inspect(l)
     end
   end
+  defp fmt_list(v) when is_tuple(v), do: inspect(v)
   defp fmt_list(v), do: to_string(v)
 end
