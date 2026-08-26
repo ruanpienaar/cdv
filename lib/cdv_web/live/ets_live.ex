@@ -1,40 +1,43 @@
 defmodule CdvWeb.EtsLive do
   use CdvWeb, :live_view
   alias Cdv.DumpServer
-  import CdvWeb.CoreComponents
+  alias Phoenix.LiveView.AsyncResult
 
   @impl true
   def mount(_params, _session, socket) do
-    status = DumpServer.status()
-    {tables, error} = fetch_tables()
-
     {:ok,
      socket
-     |> assign(:dump_status, status)
+     |> assign(:dump_status, DumpServer.status())
      |> assign(:current_page, "ets")
-     |> assign(:tables, tables)
-     |> assign(:error, error)
      |> assign(:sort, :memory)
-     |> assign(:filter, "")}
+     |> assign(:filter, "")
+     |> assign_async(:tables, fn ->
+       case DumpServer.ets_tables() do
+         {:ok, list} -> {:ok, %{tables: sort_tables(list, :memory)}}
+         {:error, e} -> {:error, e}
+       end
+     end)}
   end
 
   @impl true
   def handle_event("sort", %{"col" => col}, socket) do
     col_atom = String.to_existing_atom(col)
-    sorted = sort_tables(socket.assigns.tables, col_atom)
-    {:noreply, socket |> assign(:tables, sorted) |> assign(:sort, col_atom)}
+
+    socket =
+      case socket.assigns.tables do
+        %AsyncResult{ok?: true, result: list} = async ->
+          assign(socket, :tables, AsyncResult.ok(async, sort_tables(list, col_atom)))
+
+        _ ->
+          socket
+      end
+
+    {:noreply, assign(socket, :sort, col_atom)}
   end
 
   @impl true
-  def handle_event("filter", %{"q" => q}, socket) do
+  def handle_event("filter", %{"value" => q}, socket) do
     {:noreply, assign(socket, :filter, q)}
-  end
-
-  defp fetch_tables do
-    case DumpServer.ets_tables() do
-      {:ok, list} -> {sort_tables(list, :memory), nil}
-      {:error, e} -> {[], e}
-    end
   end
 
   defp sort_tables(tables, :memory) do
@@ -63,29 +66,38 @@ defmodule CdvWeb.EtsLive do
   defp visible(tables, filter) do
     f = String.downcase(filter)
     Enum.filter(tables, fn t ->
-      String.contains?(String.downcase(to_string(t.id)), f) or
-      String.contains?(String.downcase(to_string(t.name)), f) or
-      String.contains?(String.downcase(to_string(t.pid)), f)
+      String.contains?(String.downcase(searchable(t.id)), f) or
+      String.contains?(String.downcase(searchable(t.name)), f) or
+      String.contains?(String.downcase(searchable(t.pid)), f)
     end)
   end
 
   @impl true
   def render(assigns) do
-    filtered = visible(assigns.tables, assigns.filter)
-    assigns = assign(assigns, :filtered, filtered)
-
     ~H"""
     <div class="page-title">ETS Tables</div>
 
+    <.async_result :let={tables} assign={@tables}>
+      <:loading><.loading label="Parsing ETS tables from dump…" /></:loading>
+      <:failed :let={reason}><.async_failed reason={reason} /></:failed>
+      <.ets_table tables={tables} filter={@filter} sort={@sort} />
+    </.async_result>
+    """
+  end
+
+  attr :tables, :list, required: true
+  attr :filter, :string, required: true
+  attr :sort, :atom, required: true
+
+  defp ets_table(assigns) do
+    assigns = assign(assigns, :filtered, visible(assigns.tables, assigns.filter))
+
+    ~H"""
     <div class="table-toolbar">
       <input class="search-box" placeholder="Filter by ID, name, owner…"
-             phx-keyup="filter" phx-value-q="" name="q" value={@filter} />
+             phx-keyup="filter" phx-debounce="150" name="q" value={@filter} />
       <span class="row-count"><%= length(@filtered) %> / <%= length(@tables) %> tables</span>
     </div>
-
-    <%= if @error do %>
-      <div class="flash-error"><%= @error %></div>
-    <% end %>
 
     <table class="cdv-table">
       <thead>

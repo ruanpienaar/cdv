@@ -4,57 +4,59 @@ defmodule CdvWeb.TimersLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    status = DumpServer.status()
-    {timers, error} = fetch_timers()
-
     {:ok,
      socket
-     |> assign(:dump_status, status)
+     |> assign(:dump_status, DumpServer.status())
      |> assign(:current_page, "timers")
-     |> assign(:timers, timers)
-     |> assign(:error, error)
-     |> assign(:filter, "")}
+     |> assign(:filter, "")
+     |> assign_async(:timers, fn ->
+       case DumpServer.timers() do
+         {:ok, list} -> {:ok, %{timers: list}}
+         {:error, e} -> {:error, e}
+       end
+     end)}
   end
 
   @impl true
-  def handle_event("filter", %{"q" => q}, socket) do
+  def handle_event("filter", %{"value" => q}, socket) do
     {:noreply, assign(socket, :filter, q)}
-  end
-
-  defp fetch_timers do
-    case DumpServer.timers() do
-      {:ok, list} -> {list, nil}
-      {:error, e} -> {[], e}
-    end
   end
 
   defp visible(timers, ""), do: timers
   defp visible(timers, filter) do
     f = String.downcase(filter)
     Enum.filter(timers, fn t ->
-      String.contains?(String.downcase(to_string(t.pid)), f) or
-      String.contains?(String.downcase(to_string(t.name)), f) or
-      String.contains?(String.downcase(to_string(t.msg)), f)
+      String.contains?(String.downcase(searchable(t.pid)), f) or
+      String.contains?(String.downcase(searchable(t.name)), f) or
+      String.contains?(String.downcase(searchable(t.msg)), f)
     end)
   end
 
   @impl true
   def render(assigns) do
-    filtered = visible(assigns.timers, assigns.filter)
-    assigns = assign(assigns, :filtered, filtered)
-
     ~H"""
     <div class="page-title">Timers</div>
 
+    <.async_result :let={timers} assign={@timers}>
+      <:loading><.loading label="Parsing timers from dump…" /></:loading>
+      <:failed :let={reason}><.async_failed reason={reason} /></:failed>
+      <.timer_table timers={timers} filter={@filter} />
+    </.async_result>
+    """
+  end
+
+  attr :timers, :list, required: true
+  attr :filter, :string, required: true
+
+  defp timer_table(assigns) do
+    assigns = assign(assigns, :filtered, visible(assigns.timers, assigns.filter))
+
+    ~H"""
     <div class="table-toolbar">
       <input class="search-box" placeholder="Filter by PID, name, message…"
-             phx-keyup="filter" phx-value-q="" name="q" value={@filter} />
+             phx-keyup="filter" phx-debounce="150" name="q" value={@filter} />
       <span class="row-count"><%= length(@filtered) %> / <%= length(@timers) %> timers</span>
     </div>
-
-    <%= if @error do %>
-      <div class="flash-error"><%= @error %></div>
-    <% end %>
 
     <table class="cdv-table">
       <thead>

@@ -13,16 +13,19 @@ defmodule CdvWeb.Router do
   scope "/", CdvWeb do
     pipe_through :browser
 
-    live "/",            HomeLive,          :index
-    live "/general",     GeneralLive,       :index
-    live "/processes",   ProcessesLive,     :index
-    live "/process/:pid", ProcessDetailLive, :show
-    live "/ports",       PortsLive,         :index
-    live "/port/:id",    PortDetailLive,    :show
-    live "/ets",         EtsLive,           :index
-    live "/timers",      TimersLive,        :index
-    live "/memory",      MemoryLive,        :index
-    live "/nodes",       NodesLive,         :index
-    live "/modules",     ModulesLive,       :index
+    live "/", HomeLive, :index
+
+    live_session :require_dump, on_mount: {CdvWeb.RequireDump, :default} do
+      live "/general",     GeneralLive,       :index
+      live "/processes",   ProcessesLive,     :index
+      live "/process/:pid", ProcessDetailLive, :show
+      live "/ports",       PortsLive,         :index
+      live "/port/:id",    PortDetailLive,    :show
+      live "/ets",         EtsLive,           :index
+      live "/timers",      TimersLive,        :index
+      live "/memory",      MemoryLive,        :index
+      live "/nodes",       NodesLive,         :index
+      live "/modules",     ModulesLive,       :index
+    end
   end
 end

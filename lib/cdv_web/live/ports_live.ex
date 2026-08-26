@@ -4,58 +4,60 @@ defmodule CdvWeb.PortsLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    status = DumpServer.status()
-    {ports, error} = fetch_ports()
-
     {:ok,
      socket
-     |> assign(:dump_status, status)
+     |> assign(:dump_status, DumpServer.status())
      |> assign(:current_page, "ports")
-     |> assign(:ports, ports)
-     |> assign(:error, error)
-     |> assign(:filter, "")}
+     |> assign(:filter, "")
+     |> assign_async(:ports, fn ->
+       case DumpServer.ports() do
+         {:ok, list} -> {:ok, %{ports: list}}
+         {:error, e} -> {:error, e}
+       end
+     end)}
   end
 
   @impl true
-  def handle_event("filter", %{"q" => q}, socket) do
+  def handle_event("filter", %{"value" => q}, socket) do
     {:noreply, assign(socket, :filter, q)}
-  end
-
-  defp fetch_ports do
-    case DumpServer.ports() do
-      {:ok, list} -> {list, nil}
-      {:error, e} -> {[], e}
-    end
   end
 
   defp visible(ports, ""), do: ports
   defp visible(ports, filter) do
     f = String.downcase(filter)
     Enum.filter(ports, fn p ->
-      String.contains?(String.downcase(to_string(p.id)), f) or
-      String.contains?(String.downcase(to_string(p.name)), f) or
-      String.contains?(String.downcase(to_string(p.controls)), f) or
-      String.contains?(String.downcase(to_string(p.connected)), f)
+      String.contains?(String.downcase(searchable(p.id)), f) or
+      String.contains?(String.downcase(searchable(p.name)), f) or
+      String.contains?(String.downcase(searchable(p.controls)), f) or
+      String.contains?(String.downcase(searchable(p.connected)), f)
     end)
   end
 
   @impl true
   def render(assigns) do
-    filtered = visible(assigns.ports, assigns.filter)
-    assigns = assign(assigns, :filtered, filtered)
-
     ~H"""
     <div class="page-title">Ports</div>
 
+    <.async_result :let={ports} assign={@ports}>
+      <:loading><.loading label="Parsing ports from dump…" /></:loading>
+      <:failed :let={reason}><.async_failed reason={reason} /></:failed>
+      <.port_table ports={ports} filter={@filter} />
+    </.async_result>
+    """
+  end
+
+  attr :ports, :list, required: true
+  attr :filter, :string, required: true
+
+  defp port_table(assigns) do
+    assigns = assign(assigns, :filtered, visible(assigns.ports, assigns.filter))
+
+    ~H"""
     <div class="table-toolbar">
       <input class="search-box" placeholder="Filter by ID, name, controls…"
-             phx-keyup="filter" phx-value-q="" name="q" value={@filter} />
+             phx-keyup="filter" phx-debounce="150" name="q" value={@filter} />
       <span class="row-count"><%= length(@filtered) %> / <%= length(@ports) %> ports</span>
     </div>
-
-    <%= if @error do %>
-      <div class="flash-error"><%= @error %></div>
-    <% end %>
 
     <table class="cdv-table">
       <thead>

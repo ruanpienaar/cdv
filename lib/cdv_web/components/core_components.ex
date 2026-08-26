@@ -43,6 +43,88 @@ defmodule CdvWeb.CoreComponents do
   end
   def format_int(n), do: to_string(n)
 
+  @doc """
+  Best-effort string for filtering. Unlike `to_string/1` this never raises on
+  the shapes the dump parser hands back — module names and port ids arrive as
+  tuples, and `String.Chars` has no tuple implementation.
+  """
+  def searchable(nil), do: ""
+  def searchable(v) when is_binary(v), do: v
+  def searchable(v) when is_atom(v), do: Atom.to_string(v)
+  def searchable(v) when is_integer(v), do: Integer.to_string(v)
+  def searchable(v) when is_pid(v), do: v |> :erlang.pid_to_list() |> List.to_string()
+
+  def searchable(v) when is_list(v) do
+    try do
+      if List.ascii_printable?(v), do: List.to_string(v), else: inspect(v)
+    rescue
+      _ -> inspect(v)
+    end
+  end
+
+  def searchable(v), do: inspect(v)
+
+  attr :label, :string, default: "Loading…"
+  def loading(assigns) do
+    ~H"""
+    <div class="loading-panel">
+      <span class="spinner"></span>
+      <span><%= @label %></span>
+    </div>
+    """
+  end
+
+  @doc """
+  Renders an async failure. `reason` is whatever `assign_async/3` returned in
+  its `{:error, reason}` tuple, or an `{:exit, term}` if the task itself died.
+  """
+  attr :reason, :any, required: true
+  def async_failed(assigns) do
+    ~H"""
+    <div class="flash-error"><%= format_reason(@reason) %></div>
+    """
+  end
+
+  # assign_async reports a returned {:error, reason} as-is, and a crashed task
+  # as {:exit, reason}.
+  defp format_reason({:error, reason}), do: format_reason(reason)
+  defp format_reason({:exit, reason}), do: "Failed to read dump: #{inspect(reason)}"
+  defp format_reason(reason) when is_binary(reason), do: reason
+  defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp format_reason(reason), do: inspect(reason)
+
+  @doc """
+  Default number of table rows rendered before truncating.
+
+  A large dump has thousands of processes and modules; rendering them all costs
+  ~50k DOM nodes and several MB of HTML per page view, and every filter
+  keystroke re-renders the lot. Nobody scrolls 5000 rows — they filter — so we
+  render a window and offer an explicit escape hatch.
+  """
+  def default_row_limit, do: 500
+
+  attr :shown, :integer, required: true
+  attr :total, :integer, required: true
+  attr :noun, :string, default: "rows"
+
+  def truncation_notice(assigns) do
+    ~H"""
+    <%= if @shown < @total do %>
+      <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-dim); padding:0.75rem 0; display:flex; align-items:center; gap:0.75rem;">
+        <span>Showing first <%= format_int(@shown) %> of <%= format_int(@total) %> <%= @noun %> — filter to narrow.</span>
+        <button phx-click="show_all"
+                style="font-family:var(--font-mono); font-size:11px; background:transparent; color:var(--accent2); border:1px solid var(--border); padding:4px 10px; border-radius:var(--radius); cursor:pointer;">
+          Show all
+        </button>
+      </div>
+    <% end %>
+    """
+  end
+
+  @doc "Takes `limit` rows, where `:all` means no cap."
+  def limit_rows(rows, :all), do: rows
+  def limit_rows(rows, n) when is_integer(n), do: Enum.take(rows, n)
+
   attr :rows, :list, required: true
   def kv_grid(assigns) do
     ~H"""

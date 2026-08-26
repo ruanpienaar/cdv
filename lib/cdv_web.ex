@@ -41,10 +41,26 @@ defmodule CdvWeb do
 
   defp html_helpers do
     quote do
-      use Phoenix.HTML
-      import Phoenix.LiveView.Helpers
+      # HTML escaping functionality (raw/1, html_escape/1)
+      import Phoenix.HTML
+
+      # Core UI components
       import CdvWeb.CoreComponents
-      use Phoenix.VerifiedRoutes, router: CdvWeb.Router, endpoint: CdvWeb.Endpoint, statics: CdvWeb.static_paths()
+
+      # Common modules
+      alias Phoenix.LiveView.JS
+
+      # Routes generation with the ~p sigil
+      unquote(verified_routes())
+    end
+  end
+
+  def verified_routes do
+    quote do
+      use Phoenix.VerifiedRoutes,
+        router: CdvWeb.Router,
+        endpoint: CdvWeb.Endpoint,
+        statics: CdvWeb.static_paths()
     end
   end
 

@@ -1,34 +1,36 @@
 defmodule CdvWeb.NodesLive do
   use CdvWeb, :live_view
   alias Cdv.DumpServer
+  alias Phoenix.LiveView.AsyncResult
 
   @impl true
   def mount(_params, _session, socket) do
-    status = DumpServer.status()
-    {nodes, error} = fetch_nodes()
-
     {:ok,
      socket
-     |> assign(:dump_status, status)
+     |> assign(:dump_status, DumpServer.status())
      |> assign(:current_page, "nodes")
-     |> assign(:nodes, nodes)
-     |> assign(:error, error)
-     |> assign(:selected, nil)}
+     |> assign(:selected, nil)
+     |> assign(:selected_node, nil)
+     |> assign_async(:nodes, fn ->
+       case DumpServer.nodes() do
+         {:ok, list} -> {:ok, %{nodes: list}}
+         {:error, e} -> {:error, e}
+       end
+     end)}
   end
 
   @impl true
   def handle_event("select", %{"idx" => idx}, socket) do
     i = String.to_integer(idx)
-    node = Enum.at(socket.assigns.nodes, i)
+
+    node =
+      case socket.assigns.nodes do
+        %AsyncResult{ok?: true, result: list} -> Enum.at(list, i)
+        _ -> nil
+      end
+
     selected = if socket.assigns.selected == i, do: nil, else: i
     {:noreply, socket |> assign(:selected, selected) |> assign(:selected_node, node)}
-  end
-
-  defp fetch_nodes do
-    case DumpServer.nodes() do
-      {:ok, list} -> {list, nil}
-      {:error, e} -> {[], e}
-    end
   end
 
   @impl true
@@ -36,10 +38,20 @@ defmodule CdvWeb.NodesLive do
     ~H"""
     <div class="page-title">Nodes</div>
 
-    <%= if @error do %>
-      <div class="flash-error"><%= @error %></div>
-    <% end %>
+    <.async_result :let={nodes} assign={@nodes}>
+      <:loading><.loading label="Reading distribution info…" /></:loading>
+      <:failed :let={reason}><.async_failed reason={reason} /></:failed>
+      <.node_table nodes={nodes} selected={@selected} selected_node={@selected_node} />
+    </.async_result>
+    """
+  end
 
+  attr :nodes, :list, required: true
+  attr :selected, :integer, required: true
+  attr :selected_node, :any, required: true
+
+  defp node_table(assigns) do
+    ~H"""
     <%= if @nodes == [] do %>
       <div style="color:var(--muted); font-family:var(--font-mono);">No distributed nodes found.</div>
     <% else %>
@@ -100,5 +112,7 @@ defmodule CdvWeb.NodesLive do
       _ -> inspect(v)
     end
   end
-  defp fmt(v), do: to_string(v)
+  defp fmt(v) when is_tuple(v), do: inspect(v)
+  defp fmt(v) when is_binary(v) or is_atom(v) or is_number(v), do: to_string(v)
+  defp fmt(v), do: inspect(v)
 end

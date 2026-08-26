@@ -1,65 +1,107 @@
 defmodule CdvWeb.ProcessesLive do
   use CdvWeb, :live_view
   alias Cdv.DumpServer
-  import CdvWeb.CoreComponents
+  alias Phoenix.LiveView.AsyncResult
 
   @impl true
   def mount(_params, _session, socket) do
-    status = DumpServer.status()
-    {procs, error} = fetch_procs(:memory)
-
     {:ok,
      socket
-     |> assign(:dump_status, status)
+     |> assign(:dump_status, DumpServer.status())
      |> assign(:current_page, "processes")
-     |> assign(:procs, procs)
-     |> assign(:error, error)
      |> assign(:sort, :memory)
-     |> assign(:filter, "")}
+     |> assign(:filter, "")
+     |> assign(:limit, default_row_limit())
+     |> assign_async(:procs, fn ->
+       case DumpServer.processes() do
+         {:ok, list} -> {:ok, %{procs: sort_procs(list, :memory)}}
+         {:error, e} -> {:error, e}
+       end
+     end)}
   end
 
+  # Sorting happens on the already-loaded list — re-querying DumpServer would
+  # re-parse the whole dump on every column click.
   @impl true
   def handle_event("sort", %{"col" => col}, socket) do
     col_atom = String.to_existing_atom(col)
-    {procs, error} = fetch_procs(col_atom)
-    {:noreply, socket |> assign(:procs, procs) |> assign(:sort, col_atom) |> assign(:error, error)}
+
+    socket =
+      case socket.assigns.procs do
+        %AsyncResult{ok?: true, result: list} = async ->
+          assign(socket, :procs, AsyncResult.ok(async, sort_procs(list, col_atom)))
+
+        _ ->
+          socket
+      end
+
+    {:noreply, assign(socket, :sort, col_atom)}
   end
 
   @impl true
-  def handle_event("filter", %{"q" => q}, socket) do
-    {:noreply, assign(socket, :filter, q)}
+  def handle_event("filter", %{"value" => q}, socket) do
+    {:noreply, socket |> assign(:filter, q) |> assign(:limit, default_row_limit())}
   end
 
-  defp fetch_procs(sort) do
-    case DumpServer.processes(sort: sort) do
-      {:ok, list} -> {list, nil}
-      {:error, e} -> {[], e}
-    end
+  @impl true
+  def handle_event("show_all", _params, socket) do
+    {:noreply, assign(socket, :limit, :all)}
   end
+
+  defp sort_procs(procs, :memory), do: Enum.sort_by(procs, &num(&1.memory), :desc)
+  defp sort_procs(procs, :reductions), do: Enum.sort_by(procs, &num(&1.reductions), :desc)
+  defp sort_procs(procs, :msg_q_len), do: Enum.sort_by(procs, &num(&1.msg_q_len), :desc)
+  defp sort_procs(procs, :pid), do: Enum.sort_by(procs, &fmt_pid(&1.pid))
+  defp sort_procs(procs, :name), do: Enum.sort_by(procs, &String.downcase(to_string(&1.name || "")))
+  defp sort_procs(procs, _), do: procs
+
+  defp num(n) when is_integer(n), do: n
+  defp num(_), do: 0
 
   defp visible(procs, ""), do: procs
   defp visible(procs, filter) do
     f = String.downcase(filter)
     Enum.filter(procs, fn p ->
-      String.contains?(String.downcase(to_string(p.pid)), f) or
-      String.contains?(String.downcase(to_string(p.name)), f) or
-      String.contains?(String.downcase(to_string(p.init_func)), f)
+      String.contains?(String.downcase(searchable(p.pid)), f) or
+      String.contains?(String.downcase(searchable(p.name)), f) or
+      String.contains?(String.downcase(searchable(p.init_func)), f)
     end)
   end
 
   @impl true
   def render(assigns) do
-    filtered = visible(assigns.procs, assigns.filter)
-    assigns = assign(assigns, :filtered, filtered)
-
     ~H"""
     <div class="page-title">Processes</div>
 
+    <.async_result :let={procs} assign={@procs}>
+      <:loading><.loading label="Parsing processes from dump…" /></:loading>
+      <:failed :let={reason}><.async_failed reason={reason} /></:failed>
+      <.proc_table procs={procs} filter={@filter} sort={@sort} limit={@limit} />
+    </.async_result>
+    """
+  end
+
+  attr :procs, :list, required: true
+  attr :filter, :string, required: true
+  attr :sort, :atom, required: true
+  attr :limit, :any, required: true
+
+  defp proc_table(assigns) do
+    filtered = visible(assigns.procs, assigns.filter)
+
+    assigns =
+      assigns
+      |> assign(:match_count, length(filtered))
+      |> assign(:shown, limit_rows(filtered, assigns.limit))
+
+    ~H"""
     <div class="table-toolbar">
       <input class="search-box" placeholder="Filter by PID, name, function…"
-             phx-keyup="filter" phx-value-q="" name="q" value={@filter} />
-      <span class="row-count"><%= length(@filtered) %> / <%= length(@procs) %> processes</span>
+             phx-keyup="filter" phx-debounce="150" name="q" value={@filter} />
+      <span class="row-count"><%= format_int(@match_count) %> / <%= format_int(length(@procs)) %> processes</span>
     </div>
+
+    <.truncation_notice shown={length(@shown)} total={@match_count} noun="processes" />
 
     <table class="cdv-table">
       <thead>
@@ -74,7 +116,7 @@ defmodule CdvWeb.ProcessesLive do
         </tr>
       </thead>
       <tbody>
-        <%= for p <- @filtered do %>
+        <%= for p <- @shown do %>
           <tr>
             <td class="pid-col">
               <.link navigate={~p"/process/#{pid_encode(p.pid)}"}>

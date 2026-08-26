@@ -1,49 +1,75 @@
 defmodule CdvWeb.ModulesLive do
   use CdvWeb, :live_view
   alias Cdv.DumpServer
-  import CdvWeb.CoreComponents
+  alias Phoenix.LiveView.AsyncResult
 
   @impl true
   def mount(_params, _session, socket) do
-    status = DumpServer.status()
-    {mods, error} = fetch_mods(:current_size)
-
     {:ok,
      socket
-     |> assign(:dump_status, status)
+     |> assign(:dump_status, DumpServer.status())
      |> assign(:current_page, "modules")
-     |> assign(:mods, mods)
-     |> assign(:error, error)
      |> assign(:sort, :current_size)
      |> assign(:filter, "")
-     |> assign(:selected, nil)}
+     |> assign(:selected, nil)
+     |> assign(:selected_mod, nil)
+     |> assign(:limit, default_row_limit())
+     |> assign_async(:mods, fn ->
+       case DumpServer.loaded_mods() do
+         {:ok, list} -> {:ok, %{mods: sort_mods(list, :current_size)}}
+         {:error, e} -> {:error, e}
+       end
+     end)}
   end
 
   @impl true
   def handle_event("sort", %{"col" => col}, socket) do
     col_atom = String.to_existing_atom(col)
-    sorted = sort_mods(socket.assigns.mods, col_atom)
-    {:noreply, socket |> assign(:mods, sorted) |> assign(:sort, col_atom)}
+
+    socket =
+      case socket.assigns.mods do
+        %AsyncResult{ok?: true, result: list} = async ->
+          assign(socket, :mods, AsyncResult.ok(async, sort_mods(list, col_atom)))
+
+        _ ->
+          socket
+      end
+
+    # Row indexes refer to the previous ordering, so drop any expanded row.
+    {:noreply, socket |> assign(:sort, col_atom) |> assign(:selected, nil)}
   end
 
   @impl true
-  def handle_event("filter", %{"q" => q}, socket) do
-    {:noreply, assign(socket, :filter, q)}
+  def handle_event("filter", %{"value" => q}, socket) do
+    {:noreply,
+     socket
+     |> assign(:filter, q)
+     |> assign(:selected, nil)
+     |> assign(:limit, default_row_limit())}
+  end
+
+  @impl true
+  def handle_event("show_all", _params, socket) do
+    {:noreply, assign(socket, :limit, :all)}
   end
 
   @impl true
   def handle_event("select", %{"idx" => idx}, socket) do
     i = String.to_integer(idx)
-    mod = Enum.at(socket.assigns.mods, i)
+
+    # idx comes from the rendered (filtered) rows, so resolve it against the
+    # same list rather than the full one.
+    mod =
+      case socket.assigns.mods do
+        %AsyncResult{ok?: true, result: list} ->
+          list |> visible(socket.assigns.filter) |> Enum.at(i)
+
+        _ ->
+          nil
+      end
+
     selected = if socket.assigns.selected == i, do: nil, else: i
     {:noreply, socket |> assign(:selected, selected) |> assign(:selected_mod, mod)}
-  end
-
-  defp fetch_mods(sort) do
-    case DumpServer.loaded_mods() do
-      {:ok, list} -> {sort_mods(list, sort), nil}
-      {:error, e} -> {[], e}
-    end
   end
 
   defp sort_mods(mods, :current_size), do: Enum.sort_by(mods, &parse_int(&1.current_size), :desc)
@@ -64,27 +90,47 @@ defmodule CdvWeb.ModulesLive do
   defp visible(mods, filter) do
     f = String.downcase(filter)
     Enum.filter(mods, fn m ->
-      String.contains?(String.downcase(to_string(m.mod)), f)
+      String.contains?(String.downcase(searchable(m.mod)), f)
     end)
   end
 
   @impl true
   def render(assigns) do
-    filtered = visible(assigns.mods, assigns.filter)
-    assigns = assign(assigns, :filtered, filtered)
-
     ~H"""
     <div class="page-title">Modules</div>
 
+    <.async_result :let={mods} assign={@mods}>
+      <:loading><.loading label="Parsing loaded modules from dump…" /></:loading>
+      <:failed :let={reason}><.async_failed reason={reason} /></:failed>
+      <.mod_table mods={mods} filter={@filter} sort={@sort} limit={@limit}
+                  selected={@selected} selected_mod={@selected_mod} />
+    </.async_result>
+    """
+  end
+
+  attr :mods, :list, required: true
+  attr :filter, :string, required: true
+  attr :sort, :atom, required: true
+  attr :limit, :any, required: true
+  attr :selected, :integer, required: true
+  attr :selected_mod, :any, required: true
+
+  defp mod_table(assigns) do
+    filtered = visible(assigns.mods, assigns.filter)
+
+    assigns =
+      assigns
+      |> assign(:match_count, length(filtered))
+      |> assign(:shown, limit_rows(filtered, assigns.limit))
+
+    ~H"""
     <div class="table-toolbar">
       <input class="search-box" placeholder="Filter by module name…"
-             phx-keyup="filter" phx-value-q="" name="q" value={@filter} />
-      <span class="row-count"><%= length(@filtered) %> / <%= length(@mods) %> modules</span>
+             phx-keyup="filter" phx-debounce="150" name="q" value={@filter} />
+      <span class="row-count"><%= format_int(@match_count) %> / <%= format_int(length(@mods)) %> modules</span>
     </div>
 
-    <%= if @error do %>
-      <div class="flash-error"><%= @error %></div>
-    <% end %>
+    <.truncation_notice shown={length(@shown)} total={@match_count} noun="modules" />
 
     <table class="cdv-table">
       <thead>
@@ -95,7 +141,7 @@ defmodule CdvWeb.ModulesLive do
         </tr>
       </thead>
       <tbody>
-        <%= for {m, idx} <- Enum.with_index(@filtered) do %>
+        <%= for {m, idx} <- Enum.with_index(@shown) do %>
           <tr class={if @selected == idx, do: "row-selected", else: ""} phx-click="select" phx-value-idx={idx} style="cursor:pointer;">
             <td class="mono"><%= fmt(m.mod) %></td>
             <td class="num"><%= humanize_bytes(parse_int(m.current_size)) %></td>
